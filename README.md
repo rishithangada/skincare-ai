@@ -1,45 +1,46 @@
 # Skin Care AI
 
-A mobile-first web application that analyzes skin via camera and returns personalized skincare recommendations.
+![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript) ![Tailwind](https://img.shields.io/badge/Tailwind-3-38bdf8?logo=tailwindcss) ![Anthropic Vision](https://img.shields.io/badge/Anthropic-Claude_Vision-orange?logo=anthropic)
 
-## Overview
+Part of the **SPIRIT Labs** portfolio — AI-powered products by [Rishi Thangada](https://github.com/rishithangada).
 
-Users open the app on any device with a camera, capture a photo, and receive an AI-generated skin analysis with product recommendations matched to their specific skin type and concerns.
+---
 
-## How It Works
+## What It Does
 
-1. User opens `/scan` — camera activates in the browser
-2. Photo is captured and sent to `/api/analyze`
-3. Claude vision returns `{ skinType, concerns[], recommendations[] }`
-4. Results page shows analysis and matched product cards
+Skin Care AI analyzes your skin and recommends products — either by snapping a photo with your camera or filling out a quick bio profile. Claude Vision processes the image or profile data and returns a personalized analysis with matched product cards from a curated marketplace.
 
-## Tech Stack
+---
 
-- **Frontend:** Next.js 14, TypeScript, Tailwind CSS
-- **Camera:** Web API (`navigator.mediaDevices.getUserMedia`)
-- **AI:** Claude vision for skin analysis
-- **Target:** Mobile-first, works in any modern browser
+## Features
 
-## Project Structure
+- **Dual input modes** — camera capture (live webcam) or bio form (skin type, concerns, goals)
+- **Claude Vision analysis** — skin type classification, concern detection, and recommendation rationale
+- **4-column infinite-scroll marketplace** — product cards auto-scroll in alternating directions per column for a dynamic browsing experience
+- **Affiliate product links** — every recommendation links directly to purchase
+- **Mobile-first** — works on any device with a camera; designed for phone use
 
-```
-skincare-ai/
-├── app/
-│   ├── page.tsx             # Landing page
-│   ├── scan/page.tsx        # Camera capture
-│   ├── results/page.tsx     # Analysis output
-│   └── api/analyze/route.ts # Vision handler
-└── components/
-```
-
-## Status
-
-Planning. Part of the SPIRIT OS project portfolio.
+---
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env.local   # Add ANTHROPIC_API_KEY
+```
+
+Create `.env.local`:
+```
+ANTHROPIC_API_KEY=your_key_here
+```
+
+```bash
 npm run dev
 ```
+
+Open [http://localhost:3002](http://localhost:3002).
+
+---
+
+## Status
+
+Active development. Part of the SPIRIT Labs product portfolio.
