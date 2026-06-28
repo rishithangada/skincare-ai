@@ -1,18 +1,9 @@
 import { NextResponse } from "next/server";
 import { getFallbackRecommendations } from "@/lib/products";
 import type { Concern, SkinAnalysis } from "@/lib/types";
-import { saveScan } from "@/lib/supabase";
+import { saveScanAnalysis } from "@/lib/supabase";
 
 export const runtime = "nodejs";
-
-type AnthropicTextBlock = {
-  type: "text";
-  text: string;
-};
-
-type AnthropicResponse = {
-  content?: AnthropicTextBlock[];
-};
 
 type BioData = {
   skinTone: string;
@@ -133,6 +124,54 @@ function extractJson(text: string): SkinAnalysis {
   };
 }
 
+async function callGemini(
+  apiKey: string,
+  imageBase64: string,
+  mediaType: string,
+  textPrompt: string,
+  system: string,
+): Promise<SkinAnalysis> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ parts: [
+          { inlineData: { mimeType: mediaType, data: imageBase64 } },
+          { text: textPrompt },
+        ]}],
+        generationConfig: { maxOutputTokens: 2000 },
+      }),
+    },
+  );
+  const payload = await res.json() as { error?: { message?: string }; candidates?: { content: { parts: { text: string }[] } }[] };
+  if (!res.ok) throw new Error(payload.error?.message ?? "Gemini analysis failed.");
+  const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini response did not include text.");
+  return extractJson(text);
+}
+
+async function callGroq(prompt: string, system: string): Promise<SkinAnalysis> {
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) throw new Error("No GROQ_API_KEY");
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${groqKey}` },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 2000,
+      messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
+    }),
+  });
+  const payload = await res.json() as { error?: { message?: string }; choices?: { message: { content: string } }[] };
+  if (!res.ok) throw new Error(payload.error?.message ?? "Groq analysis failed.");
+  const text = payload.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Groq response did not include text.");
+  return extractJson(text);
+}
+
 async function callClaude(
   apiKey: string,
   content: unknown,
@@ -155,25 +194,17 @@ async function callClaude(
     body: JSON.stringify(body),
   });
 
-  const payload = (await response.json()) as AnthropicResponse & { error?: { message?: string } };
-  if (!response.ok) {
-    throw new Error(payload.error?.message ?? "Anthropic analysis failed.");
-  }
-
-  const text = payload.content?.find((block) => block.type === "text")?.text;
+  const payload = await response.json() as { error?: { message?: string }; content?: { type: string; text: string }[] };
+  if (!response.ok) throw new Error(payload.error?.message ?? "Anthropic analysis failed.");
+  const text = payload.content?.find((b) => b.type === "text")?.text;
   if (!text) throw new Error("Anthropic response did not include text content.");
   return extractJson(text);
 }
 
 export async function POST(request: Request) {
   try {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "Missing ANTHROPIC_API_KEY. Add it to .env.local before analyzing images." },
-        { status: 500 },
-      );
-    }
+    const geminiKey = process.env.GEMINI_API_KEY;
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
 
     const body = await request.json();
     const rawImage = body.imageData ?? body.image;
@@ -181,39 +212,32 @@ export async function POST(request: Request) {
     const sessionId = (body.sessionId as string | undefined) ?? "anonymous";
 
     if (rawImage) {
+      if (!geminiKey && !anthropicKey) {
+        return NextResponse.json({ error: "No vision API key configured. Add GEMINI_API_KEY to .env.local." }, { status: 500 });
+      }
       const image = parseDataUrl(rawImage);
-      const textContent = bioData
+      const textPrompt = bioData
         ? `Bio context: skin tone ${bioData.skinTone}, type ${bioData.skinType}, age ${bioData.ageRange}.\n\n${VISION_INSTRUCTIONS}`
         : VISION_INSTRUCTIONS;
 
-      const result = await callClaude(
-        apiKey,
-        [
-          { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
-          { type: "text", text: textContent },
-        ],
-        DERM_SYSTEM,
-      );
-      // fire-and-forget — don't block the response
-      saveScan({
-        session_id: sessionId,
-        severity: result.concerns[0]?.severity >= 4 ? "severe" : result.concerns[0]?.severity >= 3 ? "moderate" : result.concerns[0]?.severity >= 2 ? "mild" : "clear",
-        overall_score: Math.round(100 - (result.concerns.reduce((s, c) => s + c.severity, 0) / result.concerns.length) * 15),
-        concerns: result.concerns,
-        recommendations: result.recommendations ?? [],
-      }).catch(() => {});
+      // Prefer Gemini (free), fall back to Anthropic
+      const result = geminiKey
+        ? await callGemini(geminiKey, image.data, image.mediaType, textPrompt, DERM_SYSTEM)
+        : await callClaude(anthropicKey!, [
+            { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } },
+            { type: "text", text: textPrompt },
+          ], DERM_SYSTEM);
+
+      saveScanAnalysis(result, sessionId).catch(() => {});
       return NextResponse.json(result);
     }
 
     if (bioData) {
-      const result = await callClaude(apiKey, bioClinicalPrompt(bioData));
-      saveScan({
-        session_id: sessionId,
-        severity: "mild",
-        overall_score: 75,
-        concerns: result.concerns,
-        recommendations: result.recommendations ?? [],
-      }).catch(() => {});
+      // Bio-only: Groq (free) → Anthropic fallback
+      const result = await callGroq(bioClinicalPrompt(bioData), DERM_SYSTEM).catch(() =>
+        anthropicKey ? callClaude(anthropicKey, bioClinicalPrompt(bioData)) : Promise.reject(new Error("No AI key available"))
+      );
+      saveScanAnalysis(result, sessionId).catch(() => {});
       return NextResponse.json(result);
     }
 
