@@ -208,15 +208,22 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const rawImage = body.imageData ?? body.image;
+    const imageBase64 = typeof body.imageBase64 === "string" ? body.imageBase64 : undefined;
+    const mediaType = typeof body.mediaType === "string" ? body.mediaType : "image/jpeg";
+    const clientTextPrompt = typeof body.textPrompt === "string" ? body.textPrompt.trim() : "";
     const bioData = body.bioData as BioData | undefined;
     const sessionId = (body.sessionId as string | undefined) ?? "anonymous";
 
-    if (rawImage) {
+    if (imageBase64 || rawImage) {
       if (!geminiKey && !anthropicKey) {
         return NextResponse.json({ error: "No vision API key configured. Add GEMINI_API_KEY to .env.local." }, { status: 500 });
       }
-      const image = parseDataUrl(rawImage);
-      const textPrompt = bioData
+      const image = imageBase64
+        ? { data: imageBase64, mediaType: mediaType === "image/jpg" ? "image/jpeg" : mediaType }
+        : parseDataUrl(rawImage);
+      const textPrompt = clientTextPrompt
+        ? `${clientTextPrompt}\n\n${VISION_INSTRUCTIONS}`
+        : bioData
         ? `Bio context: skin tone ${bioData.skinTone}, type ${bioData.skinType}, age ${bioData.ageRange}.\n\n${VISION_INSTRUCTIONS}`
         : VISION_INSTRUCTIONS;
 
@@ -241,7 +248,7 @@ export async function POST(request: Request) {
       return NextResponse.json(result);
     }
 
-    return NextResponse.json({ error: "Provide imageData or bioData." }, { status: 400 });
+    return NextResponse.json({ error: "Provide imageBase64, imageData, or bioData." }, { status: 400 });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to analyze." },

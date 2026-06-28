@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Camera, Loader2, RotateCcw, ScanFace, User } from "lucide-react";
+import { ArrowLeft, Camera, Loader2, RotateCcw, ScanFace, Upload, User } from "lucide-react";
 import { PrivacyConsent } from "@/components/PrivacyConsent";
 import { saveScanToHistory } from "@/lib/history";
 import { getSessionId } from "@/lib/session";
@@ -20,6 +20,7 @@ export default function ScanPage() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const [tab, setTab] = useState<Tab>("camera");
@@ -156,16 +157,54 @@ export default function ScanPage() {
 
   const retake = () => { setPhoto(null); void startCamera(); };
 
+  function imageParts(dataUrl: string) {
+    const match = dataUrl.match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,(.+)$/);
+    if (!match) throw new Error("Please use a JPEG, PNG, or WebP image.");
+    return {
+      mediaType: match[1] === "image/jpg" ? "image/jpeg" : match[1],
+      imageBase64: match[2],
+    };
+  }
+
+  function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("Please upload an image file.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result;
+      if (typeof dataUrl !== "string") {
+        setError("Could not read that image. Try another file.");
+        return;
+      }
+      stopCamera();
+      setError(null);
+      setPhoto(dataUrl);
+      setState("captured");
+    };
+    reader.onerror = () => setError("Could not read that image. Try another file.");
+    reader.readAsDataURL(file);
+  }
+
   const analyze = async () => {
     if (!photo) return;
     setState("analyzing");
     setError(null);
 
     try {
+      const { imageBase64, mediaType } = imageParts(photo);
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageData: photo, sessionId: getSessionId() }),
+        body: JSON.stringify({
+          imageBase64,
+          mediaType,
+          textPrompt: "Analyze this facial skin image and return the requested skincare JSON.",
+          sessionId: getSessionId(),
+        }),
       });
 
       const payload = await response.json();
@@ -176,7 +215,7 @@ export default function ScanPage() {
       router.push("/results");
     } catch (e) {
       setState("captured");
-      setError(e instanceof Error ? e.message : "Analysis failed.");
+      setError(e instanceof Error ? e.message : "We could not analyze this photo. Please try again or use a clearer image.");
     }
   };
 
@@ -314,6 +353,21 @@ export default function ScanPage() {
                   {state === "error" ? "Try Camera Again" : state === "booting" ? "Starting Camera" : "Take Photo"}
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex min-h-12 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-4 font-semibold text-white"
+              >
+                <Upload size={18} />
+                Upload Photo
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={handleUpload}
+              />
               <p className="text-center text-xs leading-5 text-white/45">
                 Use even lighting and remove heavy filters. This MVP provides cosmetic guidance only.
               </p>
